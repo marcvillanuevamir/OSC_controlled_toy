@@ -2,8 +2,8 @@
 OSC receiver for ESP32 D1 Mini
 POST - Carles Viarnès
 L'Auditori - 26/04/2025
-if needed, short IO0 and GND, press reset and run in Terminal: python3 -m esptool --chip esp32 erase_flash
-
+To  upload, short IO0 and GND and press reset
+Last edited by Marc Villanueva Mir - 14/03/2025
 --------------------------------------------------------------------------------------------- */
 #ifdef ESP8266
 #include <ESP8266WiFi.h>
@@ -15,28 +15,35 @@ if needed, short IO0 and GND, press reset and run in Terminal: python3 -m esptoo
 #include <OSCBundle.h>
 #include <OSCData.h>
 
+// WiFi network
 char ssid[] = "ssid";      // your network SSID (name)
 char pass[] = "password";  // your network password
 
 // Static IP configuration
-IPAddress staticIP(192, 168, 10, 205);  // ESP32 static IP
-IPAddress gateway(192, 168, 10, 1);     // IP Address of your network gateway (router)
-IPAddress subnet(255, 255, 255, 0);     // Subnet mask
+const int id = 201;                    // specify the ID of the board you are programming
+IPAddress staticIP(192, 168, 10, id);  // ESP32 static IP
+IPAddress gateway(192, 168, 10, 1);    // IP Address of your network gateway (router)
+IPAddress subnet(255, 255, 255, 0);    // Subnet mask
+char address[10];                      // hold the id as OSC address
 
 // SERIAL ON/OFF
 #define SERIAL_ON false
 #define SERIAL \
   if (SERIAL_ON) Serial
 
-// A UDP instance to let us send and receive packets over UDP
+// UDP instance to let us send and receive packets over UDP
 WiFiUDP Udp;
-//const IPAddress outIp(192, 168, 10, 133);  // remote IP (not needed for receive)
-//const unsigned int outPort = 9999;        // remote port (not needed for receive)
-const unsigned int localPort = 8888;  // local port to listen for UDP packets (here's where we send the packets)
+const IPAddress outIp(192, 168, 10, 123);  // remote IP (static IP of the computer)
+const unsigned int outPort = 9999;         // remote port (computer)
+const unsigned int localPort = 8888;       // local port to listen for UDP packets
 
 OSCErrorCode error;
-unsigned int mosfetState = LOW;
+bool mosfetState = LOW;
 unsigned int ledVal = 0;
+bool reconnecting = false;
+
+unsigned long previousMillis = 0;
+unsigned long interval = 30000;
 
 // GPIO PINS
 const int mosfetPin = 32;
@@ -63,16 +70,17 @@ void setup() {
   pinMode(BUILTIN_LED, OUTPUT);
   pinMode(mosfetPin, OUTPUT);
   pinMode(ledPin, OUTPUT);
+  snprintf(address, sizeof(address), "/%d", id);  // Format id into address
 
   SERIAL.begin(115200);
   blink();
 
   // Connect to WiFi network
   SERIAL.println();
-  SERIAL.println();
   SERIAL.print("Connecting to ");
   SERIAL.println(ssid);
   WiFi.begin(ssid, pass);
+  WiFi.setSleep(false);  // prevent power saving when running on battery
 
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
@@ -81,12 +89,7 @@ void setup() {
   SERIAL.println("");
 
   // Configuring static IP
-  if (!WiFi.config(staticIP, gateway, subnet)) {
-    SERIAL.println("Failed to configure Static IP");
-  } else {
-    SERIAL.println("Static IP configured!");
-  }
-
+  WiFi.config(staticIP);
   SERIAL.println("WiFi connected");
   SERIAL.println("IP address: ");
   SERIAL.println(WiFi.localIP());
@@ -94,20 +97,20 @@ void setup() {
   SERIAL.println("Starting UDP");
   Udp.begin(localPort);
   SERIAL.print("Local port: ");
-  blink();
 #ifdef ESP32
   SERIAL.println(localPort);
 #else
   SERIAL.println(Udp.localPort());
 #endif
+  blink();
 }
 
 void mosfet(OSCMessage &msg) {
   mosfetState = msg.getInt(0);
-  //digitalWrite(BUILTIN_LED, mosfetState);
   digitalWrite(mosfetPin, mosfetState);
   SERIAL.print("/mosfet: ");
   SERIAL.println(mosfetState);
+  sendOSC("/mosfet/ok");
 }
 
 void led(OSCMessage &msg) {
@@ -115,12 +118,30 @@ void led(OSCMessage &msg) {
   analogWrite(ledPin, ledVal);
   SERIAL.print("/led: ");
   SERIAL.println(ledVal);
+  sendOSC("/led/ok");
+}
+
+void ping(OSCMessage &msg) {
+  sendOSC("/ping/ok");
+}
+
+bool sendOSC(const char *message) {
+  OSCMessage msg(address);
+  msg.add(message);
+  SERIAL.print("Sending OSC Message: ");
+  SERIAL.println(message);
+  Udp.beginPacket(outIp, outPort);
+  msg.send(Udp);
+  bool success = Udp.endPacket();  // Capture success state
+  msg.empty();
+  return success;  // Return true if packet was successfully sent
 }
 
 void loop() {
+
+  // Receive OSC messages
   OSCMessage msg;
   int size = Udp.parsePacket();
-
   if (size > 0) {
     while (size--) {
       msg.fill(Udp.read());
@@ -128,10 +149,32 @@ void loop() {
     if (!msg.hasError()) {
       msg.dispatch("/mosfet", mosfet);
       msg.dispatch("/led", led);
+      msg.dispatch("/ping", ping);
     } else {
       error = msg.getError();
       SERIAL.print("error: ");
       SERIAL.println(error);
+      sendOSC("/report/error");
     }
+  }
+
+  // if WiFi is down, try reconnecting
+  unsigned long currentMillis = millis();
+  if (currentMillis - previousMillis >= interval) {
+    if (WiFi.status() != WL_CONNECTED) {
+      sendOSC("/report/lost");
+      reconnecting = true;
+      SERIAL.print(millis());
+      SERIAL.println(" Reconnecting to WiFi...");
+      WiFi.disconnect();
+      WiFi.reconnect();
+      previousMillis = currentMillis;
+    }
+  }
+  if (reconnecting && WiFi.status() == WL_CONNECTED) {
+    SERIAL.println("Reconnected!");
+    sendOSC("/report/reconnected");
+    reconnecting = false;
+    blink();
   }
 }
