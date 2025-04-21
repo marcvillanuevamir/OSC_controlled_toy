@@ -3,7 +3,7 @@ OSC receiver for ESP32 D1 Mini
 POST - Carles Viarnès
 L'Auditori - 26/04/2025
 To  upload, short IO0 and GND and press reset
-Last edited by Marc Villanueva Mir - 14/03/2025
+Last edit: 12/04/2025
 --------------------------------------------------------------------------------------------- */
 #ifdef ESP8266
 #include <ESP8266WiFi.h>
@@ -12,7 +12,7 @@ Last edited by Marc Villanueva Mir - 14/03/2025
 #endif
 #include <WiFiUdp.h>
 #include <OSCMessage.h>
-#include <OSCBundle.h>
+//#include <OSCBundle.h>
 #include <OSCData.h>
 
 // WiFi network
@@ -20,7 +20,7 @@ char ssid[] = "ssid";      // your network SSID (name)
 char pass[] = "password";  // your network password
 
 // Static IP configuration
-const int id = 201;                    // specify the ID of the board you are programming
+const int id = 207;                    // specify the ID of the board you are programming
 IPAddress staticIP(192, 168, 10, id);  // ESP32 static IP
 IPAddress gateway(192, 168, 10, 1);    // IP Address of your network gateway (router)
 IPAddress subnet(255, 255, 255, 0);    // Subnet mask
@@ -43,7 +43,7 @@ unsigned int ledVal = 0;
 bool reconnecting = false;
 
 unsigned long previousMillis = 0;
-unsigned long interval = 30000;
+unsigned long interval = 50000;
 
 // GPIO PINS
 const int mosfetPin = 32;
@@ -61,9 +61,9 @@ void blink() {
   for (int i = 0; i < 6; i++) {
     blink = !blink;
     digitalWrite(BUILTIN_LED, blink);
+    digitalWrite(ledPin, blink);
     delay(75);
   }
-  digitalWrite(BUILTIN_LED, 0);
 }
 
 void setup() {
@@ -80,7 +80,7 @@ void setup() {
   SERIAL.print("Connecting to ");
   SERIAL.println(ssid);
   WiFi.begin(ssid, pass);
-  WiFi.setSleep(false);  // prevent power saving when running on battery
+  WiFi.setSleep(true);
 
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
@@ -88,7 +88,7 @@ void setup() {
   }
   SERIAL.println("");
 
-  // Configuring static IP
+  // Configure static IP
   WiFi.config(staticIP);
   SERIAL.println("WiFi connected");
   SERIAL.println("IP address: ");
@@ -110,7 +110,7 @@ void mosfet(OSCMessage &msg) {
   digitalWrite(mosfetPin, mosfetState);
   SERIAL.print("/mosfet: ");
   SERIAL.println(mosfetState);
-  sendOSC("/mosfet/ok");
+  //sendOSC("/mosfet/ok");
 }
 
 void led(OSCMessage &msg) {
@@ -118,7 +118,7 @@ void led(OSCMessage &msg) {
   analogWrite(ledPin, ledVal);
   SERIAL.print("/led: ");
   SERIAL.println(ledVal);
-  sendOSC("/led/ok");
+  //sendOSC("/led/ok");
 }
 
 void ping(OSCMessage &msg) {
@@ -134,7 +134,7 @@ bool sendOSC(const char *message) {
   msg.send(Udp);
   bool success = Udp.endPacket();  // Capture success state
   msg.empty();
-  return success;  // Return true if packet was successfully sent
+  return success;
 }
 
 void loop() {
@@ -162,7 +162,6 @@ void loop() {
   unsigned long currentMillis = millis();
   if (currentMillis - previousMillis >= interval) {
     if (WiFi.status() != WL_CONNECTED) {
-      sendOSC("/report/lost");
       reconnecting = true;
       SERIAL.print(millis());
       SERIAL.println(" Reconnecting to WiFi...");
@@ -175,6 +174,6 @@ void loop() {
     SERIAL.println("Reconnected!");
     sendOSC("/report/reconnected");
     reconnecting = false;
-    blink();
   }
+  delay(10);
 }
